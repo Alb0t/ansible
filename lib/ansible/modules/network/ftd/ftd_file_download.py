@@ -34,7 +34,7 @@ description:
   - Downloads files from Cisco FTD devices including pending changes, disk files, certificates,
     troubleshoot reports, and backups.
 version_added: "2.7"
-author: "Cisco Systems, Inc."
+author: "Cisco Systems, Inc. (@annikulin)"
 options:
   operation:
     description:
@@ -67,7 +67,7 @@ RETURN = """
 msg:
     description: The error message describing why the module failed.
     returned: error
-    type: string
+    type: str
 """
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.connection import Connection

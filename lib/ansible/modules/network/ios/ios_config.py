@@ -282,6 +282,11 @@ EXAMPLES = """
       - boot system flash bootflash:{{new_image}}
     host: "{{ inventory_hostname }}"
   when: ansible_net_version != version
+
+- name: render a Jinja2 template onto an IOS device
+  ios_config:
+    backup: yes
+    src: ios_template.j2
 """
 
 RETURN = """
@@ -298,7 +303,7 @@ commands:
 backup_path:
   description: The full path to the backup file
   returned: when backup is yes
-  type: string
+  type: str
   sample: /playbooks/ansible/backup/ios_config.2016-07-16@22:28:34
 """
 import json

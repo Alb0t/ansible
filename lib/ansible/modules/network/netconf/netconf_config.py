@@ -103,6 +103,7 @@ options:
         startup-config if changed and if :startup capability is supported by Netconf server.
     default: false
     version_added: "2.4"
+    type: bool
   backup:
     description:
       - This argument will cause the module to create a full backup of
@@ -203,7 +204,7 @@ server_capabilities:
 backup_path:
   description: The full path to the backup file
   returned: when backup is yes
-  type: string
+  type: str
   sample: /playbooks/ansible/backup/config.2016-07-16@22:28:34
 diff:
   description: If --diff option in enabled while running, the before and after configuration change are

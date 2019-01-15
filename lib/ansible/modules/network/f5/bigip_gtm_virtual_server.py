@@ -176,12 +176,13 @@ author:
 EXAMPLES = r'''
 - name: Enable virtual server
   bigip_gtm_virtual_server:
-    server: lb.mydomain.com
-    user: admin
-    password: secret
     server_name: server1
     name: my-virtual-server
     state: enabled
+    provider:
+      user: admin
+      password: secret
+      server: lb.mydomain.com
   delegate_to: localhost
 '''
 
@@ -189,12 +190,12 @@ RETURN = r'''
 server_name:
   description: The server name associated with the virtual server.
   returned: changed
-  type: string
+  type: str
   sample: /Common/my-gtm-server
 address:
   description: The new address of the resource.
   returned: changed
-  type: string
+  type: str
   sample: 1.2.3.4
 port:
   description: The new port of the resource.
@@ -229,7 +230,7 @@ virtual_server_dependencies:
 link:
   description: The new link value for the resource.
   returned: changed
-  type: string
+  type: str
   sample: /Common/my-link
 limits:
   description: The new limit configurations for the resource.

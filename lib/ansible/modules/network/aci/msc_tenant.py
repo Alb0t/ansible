@@ -1,6 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
+# Copyright: (c) 2018, Dag Wieers (@dagwieers) <dag@wieers.com>
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
@@ -24,10 +25,10 @@ options:
     description:
     - The ID of the tenant.
     type: str
-    required: yes
   tenant:
     description:
     - The name of the tenant.
+    - Alternative to the name, you can use C(tenant_id).
     type: str
     required: yes
     aliases: [ name, tenant_name ]
@@ -40,6 +41,16 @@ options:
     description:
     - The description for this tenant.
     type: str
+  users:
+    description:
+    - A list of allowed users for this tenant.
+    - Using this property will replace any existing allowed users.
+    type: list
+  sites:
+    description:
+    - A list of allowed sites for this tenant.
+    - Using this property will replace any existing allowed sites.
+    type: list
   state:
     description:
     - Use C(present) or C(absent) for adding or removing.
@@ -106,6 +117,8 @@ def main():
         display_name=dict(type='str'),
         tenant=dict(type='str', required=False, aliases=['name', 'tenant_name']),
         tenant_id=dict(type='str', required=False),
+        users=dict(type='list'),
+        sites=dict(type='list'),
         state=dict(type='str', default='present', choices=['absent', 'present', 'query']),
     )
 
@@ -126,6 +139,10 @@ def main():
 
     msc = MSCModule(module)
 
+    # Convert sites and users
+    sites = msc.lookup_sites(module.params['sites'])
+    users = msc.lookup_users(module.params['users'])
+
     path = 'tenants'
 
     # Query for existing object(s)
@@ -141,7 +158,7 @@ def main():
         msc.existing = msc.get_obj(path, id=tenant_id)
         existing_by_name = msc.get_obj(path, name=tenant)
         if existing_by_name and tenant_id != existing_by_name['id']:
-            msc.fail_json(msg="Provided tenant '{1}' with id '{2}' does not match existing id '{3}'.".format(tenant, tenant_id, existing_by_name['id']))
+            msc.fail_json(msg="Provided tenant '{0}' with id '{1}' does not match existing id '{2}'.".format(tenant, tenant_id, existing_by_name['id']))
 
     # If we found an existing object, continue with it
     if tenant_id:
@@ -161,14 +178,24 @@ def main():
     elif state == 'present':
         msc.previous = msc.existing
 
-        msc.sanitize(dict(
+        payload = dict(
             description=description,
             id=tenant_id,
             name=tenant,
             displayName=display_name,
-            siteAssociations=[],
-            userAssociations=[dict(userId="0000ffff0000000000000020")],
-        ), collate=True)
+            siteAssociations=sites,
+            userAssociations=users,
+        )
+
+        msc.sanitize(payload, collate=True)
+
+        # Ensure displayName is not undefined
+        if msc.sent.get('displayName') is None:
+            msc.sent['displayName'] = tenant
+
+        # Ensure tenant has at least admin user
+        if msc.sent.get('userAssociations') is None:
+            msc.sent['userAssociations'] = [dict(userId="0000ffff0000000000000020")]
 
         if msc.existing:
             if not issubset(msc.sent, msc.existing):

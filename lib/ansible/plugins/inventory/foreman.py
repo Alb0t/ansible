@@ -19,12 +19,12 @@ DOCUMENTATION = '''
         - inventory_cache
     options:
       plugin:
-        description: the name of this plugin, it should alwys be set to 'foreman' for this plugin to recognize it as it's own.
+        description: the name of this plugin, it should always be set to 'foreman' for this plugin to recognize it as it's own.
         required: True
         choices: ['foreman']
       url:
         description: url to foreman
-        default: 'http://localhost:300'
+        default: 'http://localhost:3000'
       user:
         description: foreman authentication user
         required: True

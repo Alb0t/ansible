@@ -38,8 +38,6 @@ options:
       - IP address part of the IP/port definition. If this parameter is not
         provided when creating a new monitor, then the default value will be
         '*'.
-      - If this value is an IP address, and the C(type) is C(tcp) (the default),
-        then a C(port) number must be specified.
   interval:
     description:
       - The interval specifying how frequently the monitor instance of this
@@ -88,20 +86,22 @@ EXAMPLES = r'''
 - name: Create TCP Echo Monitor
   bigip_monitor_tcp_echo:
     state: present
-    server: lb.mydomain.com
-    user: admin
     ip: 10.10.10.10
-    password: secret
     name: my_tcp_monitor
+    provider:
+      password: secret
+      server: lb.mydomain.com
+      user: admin
   delegate_to: localhost
 
 - name: Remove TCP Echo Monitor
   bigip_monitor_tcp_echo:
     state: absent
-    server: lb.mydomain.com
-    user: admin
-    password: secret
     name: my_tcp_monitor
+    provider:
+      server: lb.mydomain.com
+      user: admin
+      password: secret
   delegate_to: localhost
 '''
 
@@ -109,12 +109,12 @@ RETURN = r'''
 parent:
   description: New parent template of the monitor.
   returned: changed
-  type: string
+  type: str
   sample: tcp
 ip:
   description: The new IP of IP/port definition.
   returned: changed
-  type: string
+  type: str
   sample: 10.12.13.14
 description:
   description: The description of the monitor.

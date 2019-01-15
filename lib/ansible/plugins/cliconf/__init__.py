@@ -26,18 +26,11 @@ from ansible.plugins import AnsiblePlugin
 from ansible.errors import AnsibleError, AnsibleConnectionFailure
 from ansible.module_utils._text import to_bytes, to_text
 
-
 try:
     from scp import SCPClient
     HAS_SCP = True
 except ImportError:
     HAS_SCP = False
-
-try:
-    from __main__ import display
-except ImportError:
-    from ansible.utils.display import Display
-    display = Display()
 
 
 def enable_mode(func):
@@ -92,7 +85,7 @@ class CliconfBase(AnsiblePlugin):
 
     def _alarm_handler(self, signum, frame):
         """Alarm handler raised in case of command timeout """
-        display.display('closing shell due to command timeout (%s seconds).' % self._connection._play_context.timeout, log_only=True)
+        self._connection.queue_message('log', 'closing shell due to command timeout (%s seconds).' % self._connection._play_context.timeout)
         self.close()
 
     def send_command(self, command=None, prompt=None, answer=None, sendonly=False, newline=True, prompt_retry_check=False, check_all=False):

@@ -1,68 +1,76 @@
 # -*- coding: utf-8 -*-
 
-# This code is part of Ansible, but is an independent component
-
-# This particular file snippet, and this file snippet only, is BSD licensed.
-# Modules you write using this snippet, which is embedded dynamically by Ansible
-# still belong to the author of the module, and may assign their own license
-# to the complete work.
-
-# Copyright: (c) 2018, Dag Wieers <dag@wieers.com>
-# All rights reserved.
-
-# Redistribution and use in source and binary forms, with or without modification,
-# are permitted provided that the following conditions are met:
-#
-#    * Redistributions of source code must retain the above copyright
-#      notice, this list of conditions and the following disclaimer.
-#    * Redistributions in binary form must reproduce the above copyright notice,
-#      this list of conditions and the following disclaimer in the documentation
-#      and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
-# USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Copyright: (c) 2018, Dag Wieers (@dagwieers) <dag@wieers.com>
+# Simplified BSD License (see licenses/simplified_bsd.txt or https://opensource.org/licenses/BSD-2-Clause)
 
 from copy import deepcopy
 from ansible.module_utils.basic import AnsibleModule, json
-from ansible.module_utils.six.moves.urllib.parse import urljoin
+from ansible.module_utils.six import PY3
+from ansible.module_utils.six.moves.urllib.parse import urlencode, urljoin
 from ansible.module_utils.urls import fetch_url
-from ansible.module_utils._text import to_native, to_bytes
+from ansible.module_utils._text import to_bytes, to_native
+
+
+if PY3:
+    def cmp(a, b):
+        return (a > b) - (a < b)
 
 
 def issubset(subset, superset):
     ''' Recurse through nested dictionary and compare entries '''
+
+    # Both objects are the same object
     if subset is superset:
         return True
 
+    # Both objects are identical
     if subset == superset:
         return True
 
+    # Both objects have a different type
+    if type(subset) != type(superset):
+        return False
+
     for key, value in subset.items():
+        # Ignore empty values
+        if value is None:
+            return True
+
+        # Item from subset is missing from superset
         if key not in superset:
             return False
-        elif isinstance(value, str):
-            if value != superset[key]:
-                return False
-        elif isinstance(value, dict):
+
+        # Item has different types in subset and superset
+        if type(superset[key]) != type(value):
+            return False
+
+        # Compare if item values are subset
+        if isinstance(value, dict):
             if not issubset(superset[key], value):
                 return False
         elif isinstance(value, list):
-            if not set(value) <= set(superset[key]):
-                return False
+            try:
+                # NOTE: Fails for lists of dicts
+                if not set(value) <= set(superset[key]):
+                    return False
+            except TypeError:
+                # Fall back to exact comparison for lists of dicts
+                if not cmp(value, superset[key]):
+                    return False
         elif isinstance(value, set):
             if not value <= superset[key]:
                 return False
         else:
             if not value == superset[key]:
                 return False
+
     return True
+
+
+def update_qs(params):
+    ''' Append key-value pairs to self.filter_string '''
+    accepted_params = dict((k, v) for (k, v) in params.items() if v is not None)
+    return '?' + urlencode(accepted_params)
 
 
 def msc_argument_spec():
@@ -71,7 +79,7 @@ def msc_argument_spec():
         port=dict(type='int', required=False),
         username=dict(type='str', default='admin'),
         password=dict(type='str', required=True, no_log=True),
-        output_level=dict(type='str', default='normal', choices=['normal', 'info', 'debug']),
+        output_level=dict(type='str', default='normal', choices=['debug', 'info', 'normal']),
         timeout=dict(type='int', default=30),
         use_proxy=dict(type='bool', default=True),
         use_ssl=dict(type='bool', default=True),
@@ -146,7 +154,7 @@ class MSCModule(object):
 
         self.headers['Authorization'] = 'Bearer {token}'.format(**payload)
 
-    def request(self, path, method=None, data=None):
+    def request(self, path, method=None, data=None, qs=None):
         ''' Generic HTTP method for MSC requests. '''
         self.path = path
 
@@ -154,6 +162,10 @@ class MSCModule(object):
             self.method = method
 
         self.url = urljoin(self.baseuri, path)
+
+        if qs is not None:
+            self.url = self.url + update_qs(qs)
+
         resp, info = fetch_url(self.module,
                                self.url,
                                headers=self.headers,
@@ -168,8 +180,8 @@ class MSCModule(object):
         # 200: OK, 201: Created, 202: Accepted, 204: No Content
         if self.status in (200, 201, 202, 204):
             output = resp.read()
-            if self.method in ('DELETE', 'PATCH', 'POST', 'PUT') and self.status in (200, 201, 204):
-                self.result['changed'] = True
+#            if self.method in ('DELETE', 'PATCH', 'POST', 'PUT') and self.status in (200, 201, 204):
+#                self.result['changed'] = True
             if output:
                 return json.loads(output)
 
@@ -183,7 +195,7 @@ class MSCModule(object):
         elif self.status >= 400:
             try:
                 payload = json.loads(resp.read())
-            except:
+            except Exception:
                 payload = json.loads(info['body'])
             if 'code' in payload:
                 self.fail_json(msg='MSC Error {code}: {message}'.format(**payload), data=data, info=info, payload=payload)
@@ -192,20 +204,26 @@ class MSCModule(object):
 
         return {}
 
-    def query_objs(self, path, **kwargs):
+    def query_objs(self, path, key=None, **kwargs):
+        ''' Query the MSC REST API for objects in a path '''
         found = []
         objs = self.request(path, method='GET')
-        for obj in objs[path]:
-            for key in kwargs.keys():
-                if kwargs[key] is None:
+
+        if key is None:
+            key = path
+
+        for obj in objs[key]:
+            for kw_key, kw_value in kwargs.items():
+                if kw_value is None:
                     continue
-                if obj[key] != kwargs[key]:
+                if obj[kw_key] != kw_value:
                     break
             else:
                 found.append(obj)
         return found
 
     def get_obj(self, path, **kwargs):
+        ''' Get a specific object from a set of MSC REST objects '''
         objs = self.query_objs(path, **kwargs)
         if len(objs) == 0:
             return {}
@@ -213,7 +231,84 @@ class MSCModule(object):
             self.fail_json(msg='More than one object matches unique filter: {0}'.format(kwargs))
         return objs[0]
 
+    def lookup_domain(self, domain):
+        ''' Look up a domain and return its id '''
+        if domain is None:
+            return domain
+
+        d = self.get_obj('auth/domains', key='domains', name=domain)
+        if not d:
+            self.module.fail_json(msg="Domain '%s' is not valid." % domain)
+        if 'id' not in d:
+                self.module.fail_json(msg="Domain lookup failed for '%s': %s" % (domain, d))
+        return d['id']
+
+    def lookup_roles(self, roles):
+        ''' Look up roles and return their ids '''
+        if roles is None:
+            return roles
+
+        ids = []
+        for role in roles:
+            r = self.get_obj('roles', name=role)
+            if not r:
+                self.module.fail_json(msg="Role '%s' is not valid." % role)
+            if 'id' not in r:
+                self.module.fail_json(msg="Role lookup failed for '%s': %s" % (role, r))
+            ids.append(dict(roleId=r['id']))
+        return ids
+
+    def lookup_sites(self, sites):
+        ''' Look up sites and return their ids '''
+        if sites is None:
+            return sites
+
+        ids = []
+        for site in sites:
+            s = self.get_obj('sites', name=site)
+            if not s:
+                self.module.fail_json(msg="Site '%s' is not valid." % site)
+            if 'id' not in s:
+                self.module.fail_json(msg="Site lookup failed for '%s': %s" % (site, s))
+            ids.append(dict(siteId=s['id'], securityDomains=[]))
+        return ids
+
+    def lookup_users(self, users):
+        ''' Look up users and return their ids '''
+        if users is None:
+            return users
+
+        ids = []
+        for user in users:
+            u = self.get_obj('users', username=user)
+            if not u:
+                self.module.fail_json(msg="User '%s' is not valid." % user)
+            if 'id' not in u:
+                self.module.fail_json(msg="User lookup failed for '%s': %s" % (user, u))
+            ids.append(dict(userId=u['id']))
+        return ids
+
+    def create_label(self, label, label_type):
+        ''' Create a new label '''
+        return self.request('labels', method='POST', data=dict(displayName=label, type=label_type))
+
+    def lookup_labels(self, labels, label_type):
+        ''' Look up labels and return their ids (create if necessary) '''
+        if labels is None:
+            return None
+
+        ids = []
+        for label in labels:
+            l = self.get_obj('labels', displayName=label)
+            if not l:
+                l = self.create_label(label, label_type)
+            if 'id' not in l:
+                self.module.fail_json(msg="Label lookup failed for '%s': %s" % (label, l))
+            ids.append(l['id'])
+        return ids
+
     def sanitize(self, updates, collate=False, required_keys=None):
+        ''' Clean up unset keys from a request payload '''
         if required_keys is None:
             required_keys = []
         self.proposed = deepcopy(self.existing)

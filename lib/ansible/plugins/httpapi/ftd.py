@@ -69,13 +69,6 @@ BASE_HEADERS = {
 TOKEN_EXPIRATION_STATUS_CODE = 408
 UNAUTHORIZED_STATUS_CODE = 401
 
-try:
-    from __main__ import display
-except ImportError:
-    from ansible.utils.display import Display
-
-    display = Display()
-
 
 class HttpApi(HttpApiBase):
     def __init__(self, connection):
@@ -228,7 +221,7 @@ class HttpApi(HttpApiBase):
         return None
 
     def _display(self, http_method, title, msg=''):
-        display.vvvv('REST:%s:%s:%s\n%s' % (http_method, self.connection._url, title, msg))
+        self.connection.queue_message('vvvv', 'REST:%s:%s:%s\n%s' % (http_method, self.connection._url, title, msg))
 
     @staticmethod
     def _get_response_value(response_data):

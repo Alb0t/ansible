@@ -32,25 +32,22 @@ except ImportError:
 from jinja2.exceptions import UndefinedError
 
 from ansible import constants as C
-from ansible.errors import AnsibleError, AnsibleParserError, AnsibleUndefinedVariable, AnsibleFileNotFound, AnsibleAssertionError
+from ansible.errors import AnsibleError, AnsibleParserError, AnsibleUndefinedVariable, AnsibleFileNotFound, AnsibleAssertionError, AnsibleTemplateError
 from ansible.inventory.host import Host
 from ansible.inventory.helpers import sort_groups, get_group_vars
-from ansible.module_utils._text import to_native
-from ansible.module_utils.common._collections_compat import MutableMapping, Sequence
+from ansible.module_utils._text import to_bytes, to_native
+from ansible.module_utils.common._collections_compat import Mapping, MutableMapping, Sequence
 from ansible.module_utils.six import iteritems, text_type, string_types
 from ansible.plugins.loader import lookup_loader, vars_loader
-from ansible.plugins.cache import FactCache
+from ansible.vars.fact_cache import FactCache
 from ansible.template import Templar
+from ansible.utils.display import Display
 from ansible.utils.listify import listify_lookup_plugin_terms
 from ansible.utils.vars import combine_vars
 from ansible.utils.unsafe_proxy import wrap_var
 from ansible.vars.clean import namespace_facts, clean_facts
 
-try:
-    from __main__ import display
-except ImportError:
-    from ansible.utils.display import Display
-    display = Display()
+display = Display()
 
 
 def preprocess_vars(a):
@@ -136,8 +133,8 @@ class VariableManager:
     @extra_vars.setter
     def extra_vars(self, value):
         ''' ensures a clean copy of the extra_vars are used to set the value '''
-        if not isinstance(value, MutableMapping):
-            raise AnsibleAssertionError("the type of 'value' for extra_vars should be a MutableMapping, but is a %s" % type(value))
+        if not isinstance(value, Mapping):
+            raise AnsibleAssertionError("the type of 'value' for extra_vars should be a Mapping, but is a %s" % type(value))
         self._extra_vars = value.copy()
 
     def set_inventory(self, inventory):
@@ -205,7 +202,7 @@ class VariableManager:
                 basedirs = [task.get_search_path()[0]]
             elif C.PLAYBOOK_VARS_ROOT != 'top':
                 # preserves default basedirs, only option pre 2.3
-                raise AnsibleError('Unkown playbook vars logic: %s' % C.PLAYBOOK_VARS_ROOT)
+                raise AnsibleError('Unknown playbook vars logic: %s' % C.PLAYBOOK_VARS_ROOT)
 
             # if we have a task in this context, and that task has a role, make
             # sure it sees its defaults above any other roles, as we previously
@@ -243,7 +240,7 @@ class VariableManager:
                 for inventory_dir in self._inventory._sources:
                     if ',' in inventory_dir and not os.path.exists(inventory_dir):  # skip host lists
                         continue
-                    elif not os.path.isdir(inventory_dir):  # always pass 'inventory directory'
+                    elif not os.path.isdir(to_bytes(inventory_dir)):  # always pass 'inventory directory'
                         inventory_dir = os.path.dirname(inventory_dir)
 
                     for plugin in vars_loader.all():
@@ -522,7 +519,7 @@ class VariableManager:
                     loop_terms = listify_lookup_plugin_terms(terms=task.loop, templar=self._templar,
                                                              loader=self._loader, fail_on_undefined=True, convert_bare=False)
                     items = lookup_loader.get(task.loop_with, loader=self._loader, templar=self._templar).run(terms=loop_terms, variables=vars_copy)
-                except AnsibleUndefinedVariable:
+                except AnsibleTemplateError:
                     # This task will be skipped later due to this, so we just setup
                     # a dummy array for the later code so it doesn't fail
                     items = [None]
@@ -531,7 +528,7 @@ class VariableManager:
         elif task.loop is not None:
             try:
                 items = self._templar.template(task.loop)
-            except AnsibleUndefinedVariable:
+            except AnsibleTemplateError:
                 # This task will be skipped later due to this, so we just setup
                 # a dummy array for the later code so it doesn't fail
                 items = [None]
@@ -625,40 +622,43 @@ class VariableManager:
         '''
         Clears the facts for a host
         '''
-        if hostname in self._fact_cache:
-            del self._fact_cache[hostname]
+        self._fact_cache.pop(hostname, None)
 
     def set_host_facts(self, host, facts):
         '''
         Sets or updates the given facts for a host in the fact cache.
         '''
 
-        if not isinstance(facts, dict):
-            raise AnsibleAssertionError("the type of 'facts' to set for host_facts should be a dict but is a %s" % type(facts))
+        if not isinstance(facts, Mapping):
+            raise AnsibleAssertionError("the type of 'facts' to set for host_facts should be a Mapping but is a %s" % type(facts))
 
-        if host.name not in self._fact_cache:
-            self._fact_cache[host.name] = facts
+        try:
+            host_cache = self._fact_cache[host.name]
+        except KeyError:
+            # We get to set this as new
+            host_cache = facts
         else:
-            try:
-                self._fact_cache.update(host.name, facts)
-            except KeyError:
-                self._fact_cache[host.name] = facts
+            if not isinstance(host_cache, MutableMapping):
+                raise TypeError('The object retrieved for {0} must be a MutableMapping but was'
+                                ' a {1}'.format(host.name, type(host_cache)))
+            # Update the existing facts
+            host_cache.update(facts)
+
+        # Save the facts back to the backing store
+        self._fact_cache[host.name] = host_cache
 
     def set_nonpersistent_facts(self, host, facts):
         '''
         Sets or updates the given facts for a host in the fact cache.
         '''
 
-        if not isinstance(facts, dict):
-            raise AnsibleAssertionError("the type of 'facts' to set for nonpersistent_facts should be a dict but is a %s" % type(facts))
+        if not isinstance(facts, Mapping):
+            raise AnsibleAssertionError("the type of 'facts' to set for nonpersistent_facts should be a Mapping but is a %s" % type(facts))
 
-        if host.name not in self._nonpersistent_fact_cache:
+        try:
+            self._nonpersistent_fact_cache[host.name].update(facts)
+        except KeyError:
             self._nonpersistent_fact_cache[host.name] = facts
-        else:
-            try:
-                self._nonpersistent_fact_cache[host.name].update(facts)
-            except KeyError:
-                self._nonpersistent_fact_cache[host.name] = facts
 
     def set_host_variable(self, host, varname, value):
         '''

@@ -98,7 +98,7 @@ options:
         description:
             - Optionally set the user's password to this crypted value.
             - On macOS systems, this value has to be cleartext. Beware of security issues.
-            - To create a disabled account or Linux systems, set this to C('!') or C('*').
+            - To create a disabled account on Linux systems, set this to C('!') or C('*').
             - See U(https://docs.ansible.com/ansible/faq.html#how-do-i-generate-crypted-passwords-for-the-user-module)
               for details on various ways to generate these password values.
     state:
@@ -206,6 +206,30 @@ options:
         type: bool
         default: 'no'
         version_added: "2.4"
+    profile:
+        description:
+            - Sets the profile of the user.
+            - Does nothing when used with other platforms.
+            - Can set multiple profiles using comma separation.
+            - To delete all the profiles, use profile=''
+            - Currently supported on Illumos/Solaris.
+        version_added: "2.8"
+    authorization:
+        description:
+            - Sets the authorization of the user.
+            - Does nothing when used with other platforms.
+            - Can set multiple authorizations using comma separation.
+            - To delete all authorizations, use authorization=''
+            - Currently supported on Illumos/Solaris.
+        version_added: "2.8"
+    role:
+        description:
+            - Sets the role of the user.
+            - Does nothing when used with other platforms.
+            - Can set multiple roles using comma separation.
+            - To delete all roles, use role=''
+            - Currently supported on Illumos/Solaris.
+        version_added: "2.8"
 '''
 
 EXAMPLES = '''
@@ -258,7 +282,7 @@ append:
 comment:
   description: Comment section from passwd file, usually the user name
   returned: When user exists
-  type: string
+  type: str
   sample: Agent Smith
 create_home:
   description: Whether or not to create the home directory
@@ -278,12 +302,12 @@ group:
 groups:
   description: List of groups of which the user is a member
   returned: When C(groups) is not empty and C(state) is 'present'
-  type: string
+  type: str
   sample: 'chrony,apache'
 home:
   description: "Path to user's home directory"
   returned: When C(state) is 'present'
-  type: string
+  type: str
   sample: '/home/asmith'
 move_home:
   description: Whether or not to move an existing home directory
@@ -293,12 +317,12 @@ move_home:
 name:
   description: User account name
   returned: always
-  type: string
+  type: str
   sample: asmith
 password:
   description: Masked value of the password
   returned: When C(state) is 'present' and C(password) is not empty
-  type: string
+  type: str
   sample: 'NOT_LOGGING_PASSWORD'
 remove:
   description: Whether or not to remove the user account
@@ -308,22 +332,22 @@ remove:
 shell:
   description: User login shell
   returned: When C(state) is 'present'
-  type: string
+  type: str
   sample: '/bin/bash'
 ssh_fingerprint:
   description: Fingerprint of generated SSH key
   returned: When C(generate_ssh_key) is C(True)
-  type: string
+  type: str
   sample: '2048 SHA256:aYNHYcyVm87Igh0IMEDMbvW0QDlRQfE0aJugp684ko8 ansible-generated on host (RSA)'
 ssh_key_file:
   description: Path to generated SSH public key file
   returned: When C(generate_ssh_key) is C(True)
-  type: string
+  type: str
   sample: /home/asmith/.ssh/id_rsa
 ssh_public_key:
   description: Generated SSH public key file
   returned: When C(generate_ssh_key) is C(True)
-  type: string
+  type: str
   sample: >
     'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC95opt4SPEC06tOYsJQJIuN23BbLMGmYo8ysVZQc4h2DZE9ugbjWWGS1/pweUGjVstgzMkBEeBCByaEf/RJKNecKRPeGd2Bw9DCj/bn5Z6rGfNENKBmo
     618mUJBvdlEgea96QGjOwSB7/gmonduC7gsWDMNcOdSE3wJMTim4lddiBx4RgC9yXsJ6Tkz9BHD73MXPpT5ETnse+A3fw3IGVSjaueVnlUyUmOBf7fzmZbhlFVXf2Zi2rFTXqvbdGHKkzpw1U8eB8xFPP7y
@@ -331,12 +355,12 @@ ssh_public_key:
 stderr:
   description: Standard error from running commands
   returned: When stderr is returned by a command that is run
-  type: string
+  type: str
   sample: Group wheels does not exist
 stdout:
   description: Standard output from running commands
   returned: When standard output is returned by the command that is run
-  type: string
+  type: str
   sample:
 system:
   description: Whether or not the account is a system account
@@ -355,7 +379,6 @@ import errno
 import grp
 import os
 import re
-import platform
 import pty
 import pwd
 import select
@@ -364,6 +387,7 @@ import socket
 import subprocess
 import time
 
+from ansible.module_utils import distro
 from ansible.module_utils._text import to_native, to_bytes, to_text
 from ansible.module_utils.basic import load_platform_subclass, AnsibleModule
 
@@ -397,6 +421,7 @@ class User(object):
     distribution = None
     SHADOWFILE = '/etc/shadow'
     SHADOWFILE_EXPIRE_INDEX = 7
+    LOGIN_DEFS = '/etc/login.defs'
     DATE_FORMAT = '%Y-%m-%d'
 
     def __new__(cls, *args, **kwargs):
@@ -433,6 +458,9 @@ class User(object):
         self.password_lock = module.params['password_lock']
         self.groups = None
         self.local = module.params['local']
+        self.profile = module.params['profile']
+        self.authorization = module.params['authorization']
+        self.role = module.params['role']
 
         if module.params['groups'] is not None:
             self.groups = ','.join(module.params['groups'])
@@ -542,7 +570,7 @@ class User(object):
             # errors from useradd trying to create a group when
             # USERGROUPS_ENAB is set in /etc/login.defs.
             if os.path.exists('/etc/redhat-release'):
-                dist = platform.dist()
+                dist = distro.linux_distribution(full_distribution_name=False)
                 major_release = int(dist[1].split('.')[0])
                 if major_release <= 5:
                     cmd.append('-n')
@@ -551,7 +579,7 @@ class User(object):
             elif os.path.exists('/etc/SuSE-release'):
                 # -N did not exist in useradd before SLE 11 and did not
                 # automatically create a group
-                dist = platform.dist()
+                dist = distro.linux_distribution(full_distribution_name=False)
                 major_release = int(dist[1].split('.')[0])
                 if major_release >= 12:
                     cmd.append('-N')
@@ -827,10 +855,11 @@ class User(object):
         elif self.SHADOWFILE:
             # Read shadow file for user's encrypted password string
             if os.path.exists(self.SHADOWFILE) and os.access(self.SHADOWFILE, os.R_OK):
-                for line in open(self.SHADOWFILE).readlines():
-                    if line.startswith('%s:' % self.name):
-                        passwd = line.split(':')[1]
-                        expires = line.split(':')[self.SHADOWFILE_EXPIRE_INDEX] or -1
+                with open(self.SHADOWFILE, 'r') as f:
+                    for line in f:
+                        if line.startswith('%s:' % self.name):
+                            passwd = line.split(':')[1]
+                            expires = line.split(':')[self.SHADOWFILE_EXPIRE_INDEX] or -1
         return passwd, expires
 
     def get_ssh_key_path(self):
@@ -943,9 +972,8 @@ class User(object):
     def get_ssh_public_key(self):
         ssh_public_key_file = '%s.pub' % self.get_ssh_key_path()
         try:
-            f = open(ssh_public_key_file)
-            ssh_public_key = f.read().strip()
-            f.close()
+            with open(ssh_public_key_file, 'r') as f:
+                ssh_public_key = f.read().strip()
         except IOError:
             return None
         return ssh_public_key
@@ -974,11 +1002,23 @@ class User(object):
                     shutil.copytree(skeleton, path, symlinks=True)
                 except OSError as e:
                     self.module.exit_json(failed=True, msg="%s" % to_native(e))
-        else:
-            try:
-                os.makedirs(path)
-            except OSError as e:
-                self.module.exit_json(failed=True, msg="%s" % to_native(e))
+            else:
+                try:
+                    os.makedirs(path)
+                except OSError as e:
+                    self.module.exit_json(failed=True, msg="%s" % to_native(e))
+            # get umask from /etc/login.defs and set correct home mode
+            if os.path.exists(self.LOGIN_DEFS):
+                with open(self.LOGIN_DEFS, 'r') as f:
+                    for line in f:
+                        m = re.match(r'^UMASK\s+(\d+)$', line)
+                        if m:
+                            umask = int(m.group(1), 8)
+                            mode = 0o777 & ~umask
+                            try:
+                                os.chmod(path, mode)
+                            except OSError as e:
+                                self.module.exit_json(failed=True, msg="%s" % to_native(e))
 
     def chown_homedir(self, uid, gid, path):
         try:
@@ -1146,9 +1186,10 @@ class FreeBsdUser(User):
             # find current login class
             user_login_class = None
             if os.path.exists(self.SHADOWFILE) and os.access(self.SHADOWFILE, os.R_OK):
-                for line in open(self.SHADOWFILE).readlines():
-                    if line.startswith('%s:' % self.name):
-                        user_login_class = line.split(':')[4]
+                with open(self.SHADOWFILE, 'r') as f:
+                    for line in f:
+                        if line.startswith('%s:' % self.name):
+                            user_login_class = line.split(':')[4]
 
             # act only if login_class change
             if self.login_class != user_login_class:
@@ -1591,11 +1632,13 @@ class SunOS(User):
       - create_user()
       - remove_user()
       - modify_user()
+      - user_info()
     """
 
     platform = 'SunOS'
     distribution = None
     SHADOWFILE = '/etc/shadow'
+    USER_ATTR = '/etc/user_attr'
 
     def get_password_defaults(self):
         # Read password aging defaults
@@ -1603,20 +1646,21 @@ class SunOS(User):
             minweeks = ''
             maxweeks = ''
             warnweeks = ''
-            for line in open("/etc/default/passwd", 'r'):
-                line = line.strip()
-                if (line.startswith('#') or line == ''):
-                    continue
-                m = re.match(r'^([^#]*)#(.*)$', line)
-                if m:  # The line contains a hash / comment
-                    line = m.group(1)
-                key, value = line.split('=')
-                if key == "MINWEEKS":
-                    minweeks = value.rstrip('\n')
-                elif key == "MAXWEEKS":
-                    maxweeks = value.rstrip('\n')
-                elif key == "WARNWEEKS":
-                    warnweeks = value.rstrip('\n')
+            with open("/etc/default/passwd", 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if (line.startswith('#') or line == ''):
+                        continue
+                    m = re.match(r'^([^#]*)#(.*)$', line)
+                    if m:  # The line contains a hash / comment
+                        line = m.group(1)
+                    key, value = line.split('=')
+                    if key == "MINWEEKS":
+                        minweeks = value.rstrip('\n')
+                    elif key == "MAXWEEKS":
+                        maxweeks = value.rstrip('\n')
+                    elif key == "WARNWEEKS":
+                        warnweeks = value.rstrip('\n')
         except Exception as err:
             self.module.fail_json(msg="failed to read /etc/default/passwd: %s" % to_native(err))
 
@@ -1670,6 +1714,18 @@ class SunOS(User):
                 cmd.append('-k')
                 cmd.append(self.skeleton)
 
+        if self.profile is not None:
+            cmd.append('-P')
+            cmd.append(self.profile)
+
+        if self.authorization is not None:
+            cmd.append('-A')
+            cmd.append(self.authorization)
+
+        if self.role is not None:
+            cmd.append('-R')
+            cmd.append(self.role)
+
         cmd.append(self.name)
 
         (rc, out, err) = self.execute_command(cmd)
@@ -1683,35 +1739,37 @@ class SunOS(User):
                 minweeks, maxweeks, warnweeks = self.get_password_defaults()
                 try:
                     lines = []
-                    for line in open(self.SHADOWFILE, 'rb').readlines():
-                        line = to_native(line, errors='surrogate_or_strict')
-                        fields = line.strip().split(':')
-                        if not fields[0] == self.name:
-                            lines.append(line)
-                            continue
-                        fields[1] = self.password
-                        fields[2] = str(int(time.time() // 86400))
-                        if minweeks:
-                            try:
-                                fields[3] = str(int(minweeks) * 7)
-                            except ValueError:
-                                # mirror solaris, which allows for any value in this field, and ignores anything that is not an int.
-                                pass
-                        if maxweeks:
-                            try:
-                                fields[4] = str(int(maxweeks) * 7)
-                            except ValueError:
-                                # mirror solaris, which allows for any value in this field, and ignores anything that is not an int.
-                                pass
-                        if warnweeks:
-                            try:
-                                fields[5] = str(int(warnweeks) * 7)
-                            except ValueError:
-                                # mirror solaris, which allows for any value in this field, and ignores anything that is not an int.
-                                pass
-                        line = ':'.join(fields)
-                        lines.append('%s\n' % line)
-                    open(self.SHADOWFILE, 'w+').writelines(lines)
+                    with open(self.SHADOWFILE, 'rb') as f:
+                        for line in f:
+                            line = to_native(line, errors='surrogate_or_strict')
+                            fields = line.strip().split(':')
+                            if not fields[0] == self.name:
+                                lines.append(line)
+                                continue
+                            fields[1] = self.password
+                            fields[2] = str(int(time.time() // 86400))
+                            if minweeks:
+                                try:
+                                    fields[3] = str(int(minweeks) * 7)
+                                except ValueError:
+                                    # mirror solaris, which allows for any value in this field, and ignores anything that is not an int.
+                                    pass
+                            if maxweeks:
+                                try:
+                                    fields[4] = str(int(maxweeks) * 7)
+                                except ValueError:
+                                    # mirror solaris, which allows for any value in this field, and ignores anything that is not an int.
+                                    pass
+                            if warnweeks:
+                                try:
+                                    fields[5] = str(int(warnweeks) * 7)
+                                except ValueError:
+                                    # mirror solaris, which allows for any value in this field, and ignores anything that is not an int.
+                                    pass
+                            line = ':'.join(fields)
+                            lines.append('%s\n' % line)
+                    with open(self.SHADOWFILE, 'w+') as f:
+                        f.writelines(lines)
                 except Exception as err:
                     self.module.fail_json(msg="failed to update users password: %s" % to_native(err))
 
@@ -1773,6 +1831,18 @@ class SunOS(User):
             cmd.append('-s')
             cmd.append(self.shell)
 
+        if self.profile is not None and info[7] != self.profile:
+            cmd.append('-P')
+            cmd.append(self.profile)
+
+        if self.authorization is not None and info[8] != self.authorization:
+            cmd.append('-A')
+            cmd.append(self.authorization)
+
+        if self.role is not None and info[9] != self.role:
+            cmd.append('-R')
+            cmd.append(self.role)
+
         # modify the user if cmd will do anything
         if cmd_len != len(cmd):
             cmd.append(self.name)
@@ -1790,28 +1860,48 @@ class SunOS(User):
                 minweeks, maxweeks, warnweeks = self.get_password_defaults()
                 try:
                     lines = []
-                    for line in open(self.SHADOWFILE, 'rb').readlines():
-                        line = to_native(line, errors='surrogate_or_strict')
-                        fields = line.strip().split(':')
-                        if not fields[0] == self.name:
-                            lines.append(line)
-                            continue
-                        fields[1] = self.password
-                        fields[2] = str(int(time.time() // 86400))
-                        if minweeks:
-                            fields[3] = str(int(minweeks) * 7)
-                        if maxweeks:
-                            fields[4] = str(int(maxweeks) * 7)
-                        if warnweeks:
-                            fields[5] = str(int(warnweeks) * 7)
-                        line = ':'.join(fields)
-                        lines.append('%s\n' % line)
-                    open(self.SHADOWFILE, 'w+').writelines(lines)
+                    with open(self.SHADOWFILE, 'rb') as f:
+                        for line in f:
+                            line = to_native(line, errors='surrogate_or_strict')
+                            fields = line.strip().split(':')
+                            if not fields[0] == self.name:
+                                lines.append(line)
+                                continue
+                            fields[1] = self.password
+                            fields[2] = str(int(time.time() // 86400))
+                            if minweeks:
+                                fields[3] = str(int(minweeks) * 7)
+                            if maxweeks:
+                                fields[4] = str(int(maxweeks) * 7)
+                            if warnweeks:
+                                fields[5] = str(int(warnweeks) * 7)
+                            line = ':'.join(fields)
+                            lines.append('%s\n' % line)
+                    with open(self.SHADOWFILE, 'w+'):
+                        f.writelines(lines)
                     rc = 0
                 except Exception as err:
                     self.module.fail_json(msg="failed to update users password: %s" % to_native(err))
 
         return (rc, out, err)
+
+    def user_info(self):
+        info = super(SunOS, self).user_info()
+        if info:
+            info += self._user_attr_info()
+        return info
+
+    def _user_attr_info(self):
+        info = [''] * 3
+        with open(self.USER_ATTR, 'r') as file_handler:
+            for line in file_handler:
+                lines = line.strip().split('::::')
+                if lines[0] == self.user:
+                    tmp = dict(x.split('=') for x in lines[1].split(';'))
+                    info[0] = tmp.get('profiles', '')
+                    info[1] = tmp.get('auths', '')
+                    info[2] = tmp.get('roles', '')
+        return info
 
 
 class DarwinUser(User):
@@ -2509,6 +2599,9 @@ def main():
             expires=dict(type='float'),
             password_lock=dict(type='bool'),
             local=dict(type='bool'),
+            profile=dict(type='str'),
+            authorization=dict(type='str'),
+            role=dict(type='str'),
         ),
         supports_check_mode=True
     )
@@ -2564,7 +2657,7 @@ def main():
     if err:
         result['stderr'] = err
 
-    if user.user_exists():
+    if user.user_exists() and user.state == 'present':
         info = user.user_info()
         if info is False:
             result['msg'] = "failed to look up user name: %s" % user.name

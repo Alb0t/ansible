@@ -20,7 +20,6 @@ DOCUMENTATION = r'''
 module: unarchive
 version_added: '1.4'
 short_description: Unpacks an archive after (optionally) copying it from the local machine.
-extends_documentation_fragment: [ decrypt, files ]
 description:
      - The C(unarchive) module unpacks an archive.
      - By default, it will copy the source file from the local system to the target before unpacking.
@@ -86,7 +85,9 @@ options:
     type: 'bool'
     default: 'yes'
     version_added: "2.2"
-author: Michael DeHaan
+extends_documentation_fragment:
+- decrypt
+- files
 todo:
     - Re-implement tar support using native tarfile module.
     - Re-implement zip support using native zipfile module.
@@ -100,6 +101,9 @@ notes:
     - Existing files/directories in the destination which are not in the archive
       are ignored for purposes of deciding if the archive should be unpacked or not.
     - For Windows targets, use the M(win_unzip) module instead.
+seealso:
+- module: win_unzip
+author: Michael DeHaan
 '''
 
 EXAMPLES = r'''
@@ -166,7 +170,9 @@ ZIP_FILE_MODE_RE = re.compile(r'([r-][w-][SsTtx-]){3}')
 
 def crc32(path):
     ''' Return a CRC32 checksum of a file '''
-    return binascii.crc32(open(path, 'rb').read()) & 0xffffffff
+    with open(path, 'rb') as f:
+        file_content = f.read()
+    return binascii.crc32(file_content) & 0xffffffff
 
 
 def shell_escape(string):
@@ -237,7 +243,7 @@ class ZipArchive(object):
             try:
                 for item in archive.infolist():
                     self._infodict[item.filename] = int(item.CRC)
-            except:
+            except Exception:
                 archive.close()
                 raise UnarchiveError('Unable to list files in the archive')
 
@@ -261,13 +267,15 @@ class ZipArchive(object):
         else:
             try:
                 for member in archive.namelist():
+                    exclude_flag = False
                     if self.excludes:
                         for exclude in self.excludes:
-                            if not fnmatch.fnmatch(member, exclude):
-                                self._files_in_archive.append(to_native(member))
-                    else:
+                            if fnmatch.fnmatch(member, exclude):
+                                exclude_flag = True
+                                break
+                    if not exclude_flag:
                         self._files_in_archive.append(to_native(member))
-            except:
+            except Exception:
                 archive.close()
                 raise UnarchiveError('Unable to list files in the archive')
 
@@ -322,7 +330,7 @@ class ZipArchive(object):
         else:
             try:
                 fut_owner = run_owner
-            except:
+            except Exception:
                 pass
             fut_uid = run_uid
 
@@ -341,7 +349,7 @@ class ZipArchive(object):
         else:
             try:
                 fut_group = run_group
-            except:
+            except Exception:
                 pass
             fut_gid = run_gid
 
@@ -421,7 +429,7 @@ class ZipArchive(object):
             dest = os.path.join(self.dest, path)
             try:
                 st = os.lstat(dest)
-            except:
+            except Exception:
                 change = True
                 self.includes.append(path)
                 err += 'Path %s is missing\n' % path
@@ -661,11 +669,14 @@ class TgzArchive(object):
             if filename.startswith('/'):
                 filename = filename[1:]
 
+            exclude_flag = False
             if self.excludes:
                 for exclude in self.excludes:
-                    if not fnmatch.fnmatch(filename, exclude):
-                        self._files_in_archive.append(to_native(filename))
-            else:
+                    if fnmatch.fnmatch(filename, exclude):
+                        exclude_flag = True
+                        break
+
+            if not exclude_flag:
                 self._files_in_archive.append(to_native(filename))
 
         return self._files_in_archive

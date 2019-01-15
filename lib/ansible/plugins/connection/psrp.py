@@ -94,6 +94,22 @@ options:
     vars:
     - name: ansible_psrp_connection_timeout
     default: 30
+  reconnection_retries:
+    description:
+    - The number of retries on connection errors.
+    vars:
+    - name: ansible_psrp_reconnection_retries
+    default: 0
+    version_added: '2.8'
+  reconnection_backoff:
+    description:
+    - The backoff time to use in between reconnection attempts.
+      (First sleeps X, then sleeps 2*X, then sleeps 4*X, ...)
+    - This is measured in seconds.
+    vars:
+    - name: ansible_psrp_connection_backoff
+    default: 2
+    version_added: '2.8'
   message_encryption:
     description:
     - Controls the message encryption settings, this is different from TLS
@@ -156,20 +172,24 @@ options:
 
 import base64
 import json
+import logging
 import os
 
+from ansible import constants as C
 from ansible.errors import AnsibleConnectionFailure, AnsibleError
 from ansible.errors import AnsibleFileNotFound
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.module_utils._text import to_bytes, to_native, to_text
 from ansible.plugins.connection import ConnectionBase
 from ansible.plugins.shell.powershell import _common_args
+from ansible.utils.display import Display
 from ansible.utils.hashing import secure_hash
 from ansible.utils.path import makedirs_safe
 
 HAS_PYPSRP = True
 PYPSRP_IMP_ERR = None
 try:
+    import pypsrp
     from pypsrp.complex_objects import GenericComplexObject, RunspacePoolState
     from pypsrp.exceptions import AuthenticationError, WinRMError
     from pypsrp.host import PSHost, PSHostUserInterface
@@ -181,11 +201,7 @@ except ImportError as err:
     HAS_PYPSRP = False
     PYPSRP_IMP_ERR = err
 
-try:
-    from __main__ import display
-except ImportError:
-    from ansible.utils.display import Display
-    display = Display()
+display = Display()
 
 
 class Connection(ConnectionBase):
@@ -206,6 +222,11 @@ class Connection(ConnectionBase):
 
         self._shell_type = 'powershell'
         super(Connection, self).__init__(*args, **kwargs)
+
+        if not C.DEFAULT_DEBUG:
+            logging.getLogger('pypsrp').setLevel(logging.WARNING)
+            logging.getLogger('requests_credssp').setLevel(logging.INFO)
+            logging.getLogger('urllib3').setLevel(logging.INFO)
 
     def _connect(self):
         if not HAS_PYPSRP:
@@ -285,6 +306,7 @@ class Connection(ConnectionBase):
             # starting a new interpreter to save on time
             b_command = base64.b64decode(cmd.split(" ")[-1])
             script = to_text(b_command, 'utf-16-le')
+            in_data = to_text(in_data, errors="surrogate_or_strict", nonstring="passthru")
             display.vvv("PSRP: EXEC %s" % script, host=self._psrp_host)
         else:
             # in other cases we want to execute the cmd as the script
@@ -499,6 +521,8 @@ if ($bytes_read -gt 0) {
         self._psrp_operation_timeout = int(self.get_option('operation_timeout'))
         self._psrp_max_envelope_size = int(self.get_option('max_envelope_size'))
         self._psrp_configuration_name = self.get_option('configuration_name')
+        self._psrp_reconnection_retries = int(self.get_option('reconnection_retries'))
+        self._psrp_reconnection_backoff = float(self.get_option('reconnection_backoff'))
 
         supported_args = []
         for auth_kwarg in AUTH_KWARGS.values():
@@ -522,6 +546,17 @@ if ($bytes_read -gt 0) {
             max_envelope_size=self._psrp_max_envelope_size,
             operation_timeout=self._psrp_operation_timeout,
         )
+
+        # Check if PSRP version supports newer reconnection_retries argument (needs pypsrp 0.3.0+)
+        if hasattr(pypsrp, 'FEATURES') and 'wsman_reconnections' in pypsrp.FEATURES:
+            self._psrp_conn_kwargs['reconnection_retries'] = self._psrp_reconnection_retries
+            self._psrp_conn_kwargs['reconnection_backoff'] = self._psrp_reconnection_backoff
+        else:
+            if self._psrp_reconnection_retries:
+                display.debug("Installed pypsrp version does not support 'reconnection_retries'.")
+            if self._psrp_reconnection_backoff:
+                display.debug("Installed pypsrp version does not support 'reconnection_backoff'.")
+
         # add in the extra args that were set
         for arg in extra_args.intersection(supported_args):
             option = self.get_option('_extras')['ansible_psrp_%s' % arg]

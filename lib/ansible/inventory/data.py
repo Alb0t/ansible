@@ -26,14 +26,11 @@ from ansible.errors import AnsibleError
 from ansible.inventory.group import Group
 from ansible.inventory.host import Host
 from ansible.module_utils.six import iteritems, string_types
+from ansible.utils.display import Display
 from ansible.utils.vars import combine_vars
 from ansible.utils.path import basedir
 
-try:
-    from __main__ import display
-except ImportError:
-    from ansible.utils.display import Display
-    display = Display()
+display = Display()
 
 
 class InventoryData(object):
@@ -236,7 +233,7 @@ class InventoryData(object):
             g.remove_host(host)
 
     def set_variable(self, entity, varname, value):
-        ''' sets a varible for an inventory object '''
+        ''' sets a variable for an inventory object '''
 
         if entity in self.groups:
             inv_object = self.groups[entity]

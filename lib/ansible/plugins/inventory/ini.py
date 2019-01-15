@@ -24,8 +24,7 @@ DOCUMENTATION = '''
         - Do not rely on types set during definition, always make sure you specify type with a filter when needed when consuming the variable.
         - See the Examples for proper quoting to prevent changes to variable type.
     notes:
-        - Replaces the previously hardcoded INI inventory.
-        - Must be whitelisted in configuration to function.
+        - Whitelisted in configuration by default.
         - Consider switching to YAML format for inventory sources to avoid confusion on the actual type of a variable.
           The YAML inventory plugin processes variable values consistently and correctly.
 '''
@@ -41,7 +40,7 @@ EXAMPLES = '''
       http_port=8080 # all members of 'web' will inherit these
       myvar=23 # defined in a :vars section, interpreted as a string
 
-      [web:children] # child groups will automatically add their hosts to partent group
+      [web:children] # child groups will automatically add their hosts to parent group
       apache
       nginx
 
